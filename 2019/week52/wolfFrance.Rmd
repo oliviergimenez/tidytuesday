@@ -163,7 +163,8 @@ anim_map_wolf <- presence %>%
                          style = north_arrow_orienteering(fill = c("black", "black"), 
                                                            text_size = 9)) +
   # animated maps https://www.aliesdataspace.com/2019/05/animation-station/
-   transition_time(ANNEE)
+  transition_time(ANNEE) + 
+  shadow_wake(0.3)
  
 animate(anim_map_wolf, height = 600, width = 600)
  
