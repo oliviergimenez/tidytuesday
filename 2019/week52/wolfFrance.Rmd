@@ -1,0 +1,180 @@
+---
+title: "#tidytuesday 2019 week 52: Wolf presence in France"
+author: "Olivier Gimenez"
+date: "January 2, 2020"
+output: 
+  html_document:
+    toc: TRUE
+    toc_depth: 2
+    number_sections: true
+    theme: united
+    highlight: tango
+    df_print: paged
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, message = FALSE, warning = FALSE, dpi = 600, fig.height=6, fig.width = 1.777777*6)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(ggrepel)
+library(viridis)
+library(vegan)
+library(sf)
+library(rgeos)
+library(ggspatial)
+library(gganimate)
+library(extrafont)
+theme_set(theme_light())
+# in case we d like a hex grid
+# http://strimas.com/spatial/hexagonal-grids/
+make_grid <- function(x, cell_diameter, cell_area, clip = FALSE) {
+  if (missing(cell_diameter)) {
+    if (missing(cell_area)) {
+      stop("Must provide cell_diameter or cell_area")
+    } else {
+      cell_diameter <- sqrt(2 * cell_area / sqrt(3))
+    }
+  }
+  ext <- as(extent(x) + cell_diameter, "SpatialPolygons")
+  projection(ext) <- projection(x)
+  # generate array of hexagon centers
+  g <- spsample(ext, type = "hexagonal", cellsize = cell_diameter, 
+                offset = c(0.5, 0.5))
+  # convert center points to hexagons
+  g <- HexPoints2SpatialPolygons(g, dx = cell_diameter)
+  # clip to boundary of study area
+  if (clip) {
+    g <- gIntersection(g, x, byid = TRUE)
+  } else {
+    g <- g[x, ]
+  }
+  # clean up feature IDs
+  row.names(g) <- as.character(1:length(g))
+  return(g)
+}
+```
+
+# Read in data
+
+From the official website http://carmen.carmencarto.fr/38/Loup.map#, just click on icon ![alt text here](img/icon_download_inactive.png) on top and tick everything in section 'Répartition par maille'. Then read in all shapefiles from a 'data' repository.
+
+```{r}
+dir <- "data/wolf_presence"
+ff <- list.files(dir, pattern="\\.shp$", full.names=TRUE)
+ff
+
+pres_year <- list()
+for (i in 1:length(ff)){
+  pres_year[[i]] <- st_read(ff[i])
+}
+presence <- do.call(rbind, pres_year)
+```
+
+Have a look to the structure:
+```{r}
+glimpse(presence)
+```
+
+Have a look to the data:
+```{r}
+presence
+```
+
+We will also need a map of France:
+```{r}
+map <- st_read('data/map_france/france_union_departements.shp')
+```
+
+# Data wrangling
+
+```{r}
+presence %>% 
+  as_data_frame() %>%
+  group_by(ANNEE, PRESENCE) %>%
+  summarise(count = n())
+```
+
+
+```{r}
+presence %>% 
+  as_data_frame() %>%
+  group_by(ANNEE, PRESENCE) %>%
+  summarise(count = n()) %>%
+  ggplot() + 
+  aes(x = ANNEE, y = count, color = PRESENCE) + 
+  geom_line() +
+  scale_color_manual(values = c('steelblue1','steelblue4'),
+                    name = "Presence is",
+                    labels = c("occasional", "regular")) + 
+  labs(x = 'year',
+       y = 'number of cells where the species was detected',
+       title = "Trend in gray wolf (Canis lupus) presence in France", 
+       subtitle = 'Data: French Game and Wildlife Agency (http://carmen.carmencarto.fr/38/Loup.map#)',
+       caption = 'Visualisation by Olivier Gimenez for #tidytuesday 2019 week 52 \n Code: https://bit.ly/2QgfhhD') 
+```
+
+
+# Visualize
+
+## Static map
+
+```{r}
+presence %>%
+  ggplot() +
+  geom_sf(data = map, colour = "black", fill = "white", lwd = 0.2) + 
+  geom_sf(data = presence, aes(fill = PRESENCE), lwd = 0) + 
+  scale_fill_manual(values = c('steelblue1','steelblue4'),
+                    name = "Presence is",
+                    labels = c("occasional", "regular")) +
+  facet_wrap(. ~ ANNEE) + # yearly maps prior animating
+  labs(title = "Gray wolf (Canis lupus) presence in France",
+#  labs(title = emo::ji_glue(":wolf: presence in :france:"), # tried to have emojis in the title, did not work
+       subtitle = 'Data: French Game and Wildlife Agency (http://carmen.carmencarto.fr/38/Loup.map#)',
+       caption = 'Visualisation by Olivier Gimenez for #tidytuesday 2019 week 52 \n Code: https://bit.ly/2QgfhhD') 
+```
+
+## Dynamic map
+
+```{r}
+anim_map_wolf <- presence %>%
+  ggplot() +
+  geom_sf(data = map, colour = "black", fill = "white", lwd = 0.2) + 
+  geom_sf(data = presence, aes(fill = PRESENCE), lwd = 0) +
+  scale_fill_manual(values = c('steelblue1','steelblue4'),
+                    name = "Presence is",
+                    labels = c("occasional", "regular")) + 
+  labs(title = "Gray wolf (Canis lupus) presence in France, year {frame_time}", # title with dynamic year
+#  labs(title = emo::ji_glue(":wolf: presence in :france:"), # tried to have emojis in the title, did not work
+         subtitle = 'Data: French Game and Wildlife Agency (http://carmen.carmencarto.fr/38/Loup.map#)',
+       caption = 'Visualisation by Olivier Gimenez for #tidytuesday 2019 week 52 \n Code: https://bit.ly/2QgfhhD') +  
+  #scale bar
+  annotation_scale(location = "bl",  #bottom left
+                   height = unit(0.2, "cm"), #how thick it should be
+                   width_hint = 0.1, #how long relative to the data
+                   text_cex = 0.8) + #size of the text
+  #compass arrow
+  annotation_north_arrow(location = "tr",  #top right
+                         which_north = "grid",  #grid or true, depending on data projection
+                         height = unit(1, "cm"), #how tall the arrow should be
+                         width = unit(0.5, "cm"), #how wide the arrow should be
+                         #below: style of the arrow
+                         style = north_arrow_orienteering(fill = c("black", "black"), 
+                                                           text_size = 9)) +
+  # animated maps https://www.aliesdataspace.com/2019/05/animation-station/
+   transition_time(ANNEE)
+ 
+animate(anim_map_wolf, height = 600, width = 600)
+ 
+anim_save(filename = "wolf_presence.gif",
+           animation = anim_map_wolf)
+```
+
+# Session info
+
+```{r}
+devtools::session_info()
+```
+
+
